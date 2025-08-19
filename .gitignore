@@ -20,3 +20,4 @@ screenshots
 # uv
 .python-version
 uv.lock
+pyproject.toml

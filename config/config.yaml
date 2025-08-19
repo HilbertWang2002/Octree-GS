@@ -1,0 +1,24 @@
+model:
+  source_path: ../datasets/shangxingbian
+  images: images_4
+  resolution: 4
+  exp_name: 'test'
+  progressive: True
+
+optim:
+  iterations: 100_000
+  position_lr_max_steps: ${optim.iterations}
+  offset_lr_max_steps: ${optim.iterations}
+  mlp_opacity_lr_max_steps: ${optim.iterations}
+  mlp_cov_lr_max_steps: ${optim.iterations}
+  mlp_color_lr_max_steps: ${optim.iterations}
+  mlp_featurebank_lr_max_steps: ${optim.iterations}
+  appearance_lr_max_steps: ${optim.iterations}
+  update_from: 6000
+  start_stat: 2000
+  update_until: 50_000
+  coarse_iter: 25_000
+
+
+misc:
+  save_iterations: []

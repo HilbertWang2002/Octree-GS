@@ -43,7 +43,7 @@ import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams, MiscParams
+from arguments import get_cfg, ModelParams, OptimizationParams, PipelineParams, MiscParams
 
 # torch.set_num_threads(32)
 lpips_fn = lpips.LPIPS(net='vgg').to('cuda')
@@ -108,7 +108,7 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
     )
     viewpoint_stack_iter = iter(viewpoint_stack)
     ema_loss_for_log = 0.0
-    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
+    progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress", dynamic_ncols=True)
     first_iter += 1
     for iteration in range(first_iter, opt.iterations + 1):        
         # network gui not available in octree-gs yet
@@ -270,6 +270,7 @@ def training_report(tb_writer, dataset_name, iteration, Ll1, loss, l1_loss, elap
                     errormap_list = []
 
                 for idx, viewpoint in enumerate(config['cameras']):
+                    viewpoint = viewpoint.to("cuda")
                     scene.gaussians.set_anchor_mask(viewpoint.camera_center, iteration, viewpoint.resolution_scale)
                     voxel_visible_mask = prefilter_voxel(viewpoint, scene.gaussians, *renderArgs)
                     image = torch.clamp(renderFunc(viewpoint, scene.gaussians, *renderArgs, visible_mask=voxel_visible_mask)["render"], 0.0, 1.0)
@@ -496,91 +497,109 @@ def get_logger(path):
 
 if __name__ == "__main__":
     # Set up command line argument parser
-    parser = ArgumentParser(description="Training script parameters")
-    lp = ModelParams(parser)
-    op = OptimizationParams(parser)
-    pp = PipelineParams(parser)
-    mp = MiscParams(parser)
-    args = parser.parse_args(sys.argv[1:])
-    if not args.model_path and args.exp_name:
-        args.model_path = os.path.abspath(os.path.join('outputs', args.exp_name, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')))
+    parser = ArgumentParser()
+    parser.add_argument('--config', type=str, default=None)
+    args, unknown = parser.parse_known_args()
+    cfg = get_cfg(cfg_path=args.config, cli_args=unknown)
+    lp = cfg.model
+    pipe = cfg.pipeline
+    opt = cfg.optim
+    misc = cfg.misc
 
+    if not lp.model_path and lp.exp_name:
+        lp.model_path = os.path.abspath(os.path.join('outputs', lp.exp_name, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')))
     # enable logging
-    model_path = args.model_path
+    model_path = lp.model_path
     os.makedirs(model_path, exist_ok=True)
 
     logger = get_logger(model_path)
 
-    logger.info(f'args: {args}')
+    logger.info(f'args: {cfg}')
 
-    if args.test_iterations[0] == -1:
-        args.test_iterations = [i for i in range(10000, args.iterations + 1, 10000)]
-    if len(args.test_iterations) == 0 or args.test_iterations[-1] != args.iterations:
-        args.test_iterations.append(args.iterations)
-    print(args.test_iterations)
+    if len(misc.test_iterations) == 0:
+        misc.test_iterations.append(opt.iterations)
+    elif misc.test_iterations[0] == -1:
+        misc.test_iterations = [i for i in range(10000, opt.iterations + 1, 10000)]
+    if misc.test_iterations[-1] != opt.iterations:
+        misc.test_iterations.append(opt.iterations)
+    print(f"==>> misc.test_iterations: {misc.test_iterations}")
 
-    if args.save_iterations[0] == -1:
-        args.save_iterations = [i for i in range(10000, args.iterations + 1, 10000)]
-    if len(args.save_iterations) == 0 or args.save_iterations[-1] != args.iterations:
-        args.save_iterations.append(args.iterations)
-    print(args.save_iterations)
+    if len(misc.save_iterations) == 0:
+        misc.save_iterations.append(opt.iterations) 
+    elif misc.save_iterations[0] == -1:
+        misc.save_iterations = [i for i in range(10000, opt.iterations + 1, 10000)]
+    if misc.save_iterations[-1] != opt.iterations:
+        misc.save_iterations.append(opt.iterations)
+    print(f"==>> misc.save_iterations: {misc.save_iterations}")
 
-    if args.gpu != '-1':
-        os.environ['CUDA_VISIBLE_DEVICES'] = str(args.gpu)
+    if misc.gpu != '-1':
+        os.environ['CUDA_VISIBLE_DEVICES'] = str(misc.gpu)
         os.system("echo $CUDA_VISIBLE_DEVICES")
-        logger.info(f'using GPU {args.gpu}')
+        logger.info(f'using GPU {misc.gpu}')
 
     try:
-        saveRuntimeCode(os.path.join(args.model_path, 'backup'))
+        saveRuntimeCode(os.path.join(model_path, 'backup'))
     except:
         logger.info(f'save code failed~')
         
-    dataset = args.source_path.split('/')[-1]
-    exp_name = args.exp_name or args.model_path.split('/')[-2]
-    
-    if args.use_wandb:
+    dataset = lp.source_path.split('/')[-1]
+    exp_name = lp.exp_name or lp.model_path.split('/')[-2]
+
+    if misc.use_wandb:
         wandb.login()
         run = wandb.init(
             # Set the project where this run will be logged
             project=f"Octree-GS-{dataset}",
             name=exp_name,
-            dir=args.model_path,
+            dir=lp.model_path,
             # Track hyperparameters and run metadata
             settings=wandb.Settings(start_method="fork"),
-            config=vars(args)
+            config=cfg
         )
     else:
         wandb = None
-    
-    logger.info("Optimizing " + args.model_path)
+
+    logger.info("Optimizing " + lp.model_path)
 
     # Initialize system state (RNG)
-    safe_state(args.quiet)
+    safe_state(misc.quiet)
 
     # Start GUI server, configure and run training
-    network_gui.init(args.ip, args.port)
-    torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    
+    def find_free_port(ip, start_port):
+        import socket
+        port = start_port
+        while True:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                try:
+                    s.bind((ip, port))
+                    return port
+                except OSError:
+                    port += 1
+    misc.port = find_free_port(misc.ip, misc.port)
+    network_gui.init(misc.ip, misc.port)
+    print(f'Network GUI start at {misc.ip}:{misc.port}')
+    torch.autograd.set_detect_anomaly(misc.detect_anomaly)
+
     # training
-    training(lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb, logger)
-    if args.warmup:
+    training(lp, opt, pipe, dataset,  misc.test_iterations, misc.save_iterations, misc.checkpoint_iterations, misc.start_checkpoint, misc.debug_from, wandb, logger)
+    if misc.warmup:
         logger.info("\n Warmup finished! Reboot from last checkpoints")
-        new_ply_path = os.path.join(args.model_path, f'point_cloud/iteration_{args.iterations}', 'point_cloud.ply')
-        training(lp.extract(args), op.extract(args), pp.extract(args), dataset,  args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, wandb=wandb, logger=logger, ply_path=new_ply_path)
+        new_ply_path = os.path.join(lp.model_path, f'point_cloud/iteration_{opt.iterations}', 'point_cloud.ply')
+        training(lp, opt, pipe, dataset,  misc.test_iterations, misc.save_iterations, misc.checkpoint_iterations, misc.start_checkpoint, misc.debug_from, wandb=wandb, logger=logger, ply_path=new_ply_path)
 
     # All done
     logger.info("\nTraining complete.")
 
     # rendering
     logger.info(f'\nStarting Rendering~')
-    if args.eval:
-        visible_count = render_sets(lp.extract(args), -1, pp.extract(args), skip_train=True, skip_test=False, wandb=wandb, logger=logger)
+    if lp.eval:
+        visible_count = render_sets(lp, -1, pipe, skip_train=True, skip_test=False, wandb=wandb, logger=logger)
     else:
-        visible_count = render_sets(lp.extract(args), -1, pp.extract(args), skip_train=False, skip_test=True, wandb=wandb, logger=logger)
+        visible_count = render_sets(lp, -1, pipe, skip_train=False, skip_test=True, wandb=wandb, logger=logger)
     logger.info("\nRendering complete.")
 
     # calc metrics
     logger.info("\n Starting evaluation...")
-    eval_name = 'test' if args.eval else 'train'
-    evaluate(args.model_path, eval_name, visible_count=visible_count, wandb=wandb, logger=logger)
+    eval_name = 'test' if lp.eval else 'train'
+    evaluate(lp.model_path, eval_name, visible_count=visible_count, wandb=wandb, logger=logger)
     logger.info("\nEvaluating complete.")
