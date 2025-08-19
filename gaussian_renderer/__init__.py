@@ -86,7 +86,7 @@ def generate_neural_gaussians(viewpoint_camera, pc : GaussianModel, visible_mask
             camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * viewpoint_camera.uid
             appearance = pc.get_appearance(camera_indicies)
         else:
-            camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * ape_code[0]
+            camera_indicies = torch.ones_like(cat_local_view[:,0], dtype=torch.long, device=ob_dist.device) * ape_code
             appearance = pc.get_appearance(camera_indicies)
             
     # get offset's opacity

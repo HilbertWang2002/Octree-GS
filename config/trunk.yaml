@@ -1,0 +1,9 @@
+model:
+  source_path: ../datasets/trunk
+  images: images
+  resolution: 1
+  exp_name: 'trunk'
+  progressive: True
+
+misc:
+  save_iterations: []
