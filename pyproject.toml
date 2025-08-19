@@ -1,0 +1,68 @@
+[project]
+name = "octree-gs"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "torchaudio==2.8.0",
+    "plyfile",
+    "tensorboard",
+    "tqdm",
+    "einops",
+    "wandb",
+    "laspy",
+    "jaxtyping",
+    "colorama",
+    "opencv-python",
+    "scikit-learn",
+    "wheel>=0.45.1",
+    "torch-scatter>=2.1.2",
+    "gsplat",
+    "lpips>=0.1.4",
+    "viztracer>=1.0.4",
+    "simple_knn",
+    "diff_gaussian_rasterization"
+]
+
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "torch-scatter-torch28-cu129"
+url = "https://data.pyg.org/whl/torch-2.8.0+cu129.html"
+format = "flat"
+
+[tool.uv.extra-build-dependencies]
+  torch-scatter = ["torch==2.8.0"]
+
+[tool.uv.sources]
+torch = [
+  { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+  { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchaudio = [
+  { index = "pytorch-cu129", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torch-scatter = [
+  { index = "torch-scatter-torch28-cu129"}
+]
+simple_knn = [
+  { workspace=true }
+]
+diff_gaussian_rasterization = [
+  { workspace=true }
+]
+
+[tool.uv.workspace]
+members = [
+    "submodules/diff-gaussian-rasterization",
+    "submodules/simple-knn",
+]

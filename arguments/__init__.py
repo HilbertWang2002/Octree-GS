@@ -55,6 +55,7 @@ class ModelParams(ParamGroup):
         self._model_path = ""
         self._images = "images"
         self._resolution = 1
+        self.exp_name = ''
         self.white_background = False
         self.random_background = False
         self.resolution_scales = [1.0]
@@ -162,6 +163,23 @@ class OptimizationParams(ParamGroup):
         self.densify_grad_threshold = 0.0002
 
         super().__init__(parser, "Optimization Parameters")
+
+class MiscParams(ParamGroup):
+    def __init__(self, parser):
+        self.ip = '127.0.0.1'
+        self.port = 6009
+        self.debug_from = -1
+        self.detect_anomaly = False
+        self.warmup = False
+        self.use_wandb = True
+        self.test_iterations = [-1]
+        self.save_iterations = [-1]
+        self.quiet = False
+        self.checkpoint_iterations = []
+        self.start_checkpoint = None
+        self.gpu = '-1'
+
+        super().__init__(parser, 'Misc Parameters')
 
 def get_combined_args(parser : ArgumentParser):
     cmdlne_string = sys.argv[1:]

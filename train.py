@@ -12,12 +12,12 @@
 import os
 import numpy as np
 
-import subprocess
-cmd = 'nvidia-smi -q -d Memory |grep -A4 GPU|grep Used'
-result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE).stdout.decode().split('\n')
-os.environ['CUDA_VISIBLE_DEVICES']=str(np.argmin([int(x.split()[2]) for x in result[:-1]]))
+# import subprocess
+# cmd = 'nvidia-smi -q -d Memory |grep -A4 GPU|grep Used'
+# result = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE).stdout.decode().split('\n')
+# os.environ['CUDA_VISIBLE_DEVICES']=str(np.argmin([int(x.split()[2]) for x in result[:-1]]))
 
-os.system('echo $CUDA_VISIBLE_DEVICES')
+# os.system('echo $CUDA_VISIBLE_DEVICES')
 
 
 import torch
@@ -25,11 +25,13 @@ import torchvision
 import json
 import wandb
 import time
+import datetime
 from os import makedirs
 import shutil
 from pathlib import Path
 from PIL import Image
 import torchvision.transforms.functional as tf
+from torch.utils.data import DataLoader
 import lpips
 from random import randint
 from utils.loss_utils import l1_loss, ssim
@@ -41,7 +43,7 @@ import uuid
 from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
-from arguments import ModelParams, PipelineParams, OptimizationParams
+from arguments import ModelParams, PipelineParams, OptimizationParams, MiscParams
 
 # torch.set_num_threads(32)
 lpips_fn = lpips.LPIPS(net='vgg').to('cuda')
@@ -53,28 +55,29 @@ try:
 except ImportError:
     TENSORBOARD_FOUND = False
     print("not found tf board")
+TENSORBOARD_FOUND = False # Disable Tensorboard manually.
 
-def saveRuntimeCode(dst: str) -> None:
-    additionalIgnorePatterns = ['.git', '.gitignore']
-    ignorePatterns = set()
-    ROOT = '.'
-    with open(os.path.join(ROOT, '.gitignore')) as gitIgnoreFile:
-        for line in gitIgnoreFile:
-            if not line.startswith('#'):
-                if line.endswith('\n'):
-                    line = line[:-1]
-                if line.endswith('/'):
-                    line = line[:-1]
-                ignorePatterns.add(line)
-    ignorePatterns = list(ignorePatterns)
-    for additionalPattern in additionalIgnorePatterns:
-        ignorePatterns.append(additionalPattern)
+# def saveRuntimeCode(dst: str) -> None:
+#     additionalIgnorePatterns = ['.git', '.gitignore']
+#     ignorePatterns = set()
+#     ROOT = '.'
+#     with open(os.path.join(ROOT, '.gitignore')) as gitIgnoreFile:
+#         for line in gitIgnoreFile:
+#             if not line.startswith('#'):
+#                 if line.endswith('\n'):
+#                     line = line[:-1]
+#                 if line.endswith('/'):
+#                     line = line[:-1]
+#                 ignorePatterns.add(line)
+#     ignorePatterns = list(ignorePatterns)
+#     for additionalPattern in additionalIgnorePatterns:
+#         ignorePatterns.append(additionalPattern)
 
-    log_dir = Path(__file__).resolve().parent
+#     log_dir = Path(__file__).resolve().parent
 
-    shutil.copytree(log_dir, dst, ignore=shutil.ignore_patterns(*ignorePatterns))
+#     shutil.copytree(log_dir, dst, ignore=shutil.ignore_patterns(*ignorePatterns))
     
-    print('Backup Finished!')
+#     print('Backup Finished!')
 
 
 def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, wandb=None, logger=None, ply_path=None):
@@ -96,6 +99,14 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
     iter_end = torch.cuda.Event(enable_timing = True)
 
     viewpoint_stack = None
+    viewpoint_stack = DataLoader(
+        scene.getTrainCameras(),
+        batch_size=1,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=lambda x: x,
+    )
+    viewpoint_stack_iter = iter(viewpoint_stack)
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -129,9 +140,12 @@ def training(dataset, opt, pipe, dataset_name, testing_iterations, saving_iterat
         background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
         
         # Pick a random Camera
-        if not viewpoint_stack:
-            viewpoint_stack = scene.getTrainCameras().copy()
-        viewpoint_cam = viewpoint_stack.pop(randint(0, len(viewpoint_stack)-1))
+        try:
+            viewpoint_cam = next(viewpoint_stack_iter)[0]
+        except StopIteration:
+            viewpoint_stack_iter = iter(viewpoint_stack)
+            viewpoint_cam = next(viewpoint_stack_iter)[0]
+        viewpoint_cam.to("cuda")
 
         # Render
         if (iteration - 1) == debug_from:
@@ -310,7 +324,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
         
         torch.cuda.synchronize();t_start = time.time()
-        
+        view = view.to('cuda')
         gaussians.set_anchor_mask(view.camera_center, iteration, view.resolution_scale)
         voxel_visible_mask = prefilter_voxel(view, gaussians, pipeline, background)
         render_pkg = render(view, gaussians, pipeline, background, visible_mask=voxel_visible_mask)
@@ -486,19 +500,10 @@ if __name__ == "__main__":
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
-    parser.add_argument('--ip', type=str, default="127.0.0.1")
-    parser.add_argument('--port', type=int, default=6009)
-    parser.add_argument('--debug_from', type=int, default=-1)
-    parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument('--warmup', action='store_true', default=False)
-    parser.add_argument('--use_wandb', action='store_true', default=False)
-    parser.add_argument("--test_iterations", nargs="+", type=int, default=[-1])
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[-1])
-    parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
-    parser.add_argument("--start_checkpoint", type=str, default = None)
-    parser.add_argument("--gpu", type=str, default = '-1')
+    mp = MiscParams(parser)
     args = parser.parse_args(sys.argv[1:])
+    if not args.model_path and args.exp_name:
+        args.model_path = os.path.abspath(os.path.join('outputs', args.exp_name, datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')))
 
     # enable logging
     model_path = args.model_path
@@ -531,7 +536,7 @@ if __name__ == "__main__":
         logger.info(f'save code failed~')
         
     dataset = args.source_path.split('/')[-1]
-    exp_name = args.model_path.split('/')[-2]
+    exp_name = args.exp_name or args.model_path.split('/')[-2]
     
     if args.use_wandb:
         wandb.login()
@@ -539,6 +544,7 @@ if __name__ == "__main__":
             # Set the project where this run will be logged
             project=f"Octree-GS-{dataset}",
             name=exp_name,
+            dir=args.model_path,
             # Track hyperparameters and run metadata
             settings=wandb.Settings(start_method="fork"),
             config=vars(args)

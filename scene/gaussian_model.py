@@ -260,7 +260,7 @@ class GaussianModel:
         self.cam_infos = torch.empty(0, 4).float().cuda()
         for scale in scales:
             for cam in cameras[scale]:
-                cam_center = cam.camera_center
+                cam_center = cam.camera_center.cuda()
                 cam_info = torch.tensor([cam_center[0], cam_center[1], cam_center[2], scale]).float().cuda()
                 self.cam_infos = torch.cat((self.cam_infos, cam_info.unsqueeze(dim=0)), dim=0)
                 dist = torch.sqrt(torch.sum((points - cam_center)**2, dim=1))
